@@ -1,0 +1,24 @@
+{
+  "name": "Dayflow - Personal Life & Wellness Tracker",
+  "short_name": "Dayflow",
+  "description": "Aplikasi pelacak aktivitas, kebiasaan, dan kesehatan harian.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#101211",
+  "theme_color": "#101211",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ]
+}

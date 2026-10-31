@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Dayflow - Personal Life & Wellness Tracker</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'] },
+                    colors: {
+                        darkBg: '#101211', darkSurface: '#191D1A', darkSurface2: '#222823',
+                        darkText: '#F5F7F2', darkText2: '#929B91', darkAccent: '#B8F36B',
+                        lightBg: '#F5F7F2', lightSurface: '#FFFFFF', lightSurface2: '#EDF1E9',
+                        lightText: '#182018', lightText2: '#6E786D', lightAccent: '#78B83D',
+                        status: { planned: '#6E786D', progress: '#F5A623', completed: '#B8F36B', postponed: '#9013FE', skipped: '#D0021B' }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body { -webkit-tap-highlight-color: transparent; scrollbar-width: none; }
+        body::-webkit-scrollbar { display: none; }
+        .smooth-transition { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .glass-panel { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+
+        #app-container {
+            max-width: 480px; margin: 0 auto; min-height: 100vh;
+            position: relative; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            overflow-x: hidden; display: flex; flex-direction: column;
+        }
+
+        .progress-ring__circle {
+            transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+            transform: rotate(-90deg); transform-origin: 50% 50%;
+        }
+
+        .timeline-line::before {
+            content: ''; position: absolute; left: 19px; top: 24px; bottom: -24px;
+            width: 2px; background-color: currentColor; opacity: 0.1; z-index: 0;
+        }
+        .timeline-item:last-child .timeline-line::before { display: none; }
+
+        .hide { display: none !important; }
+        
+        .modal-overlay { opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+        .modal-overlay.active { opacity: 1; pointer-events: auto; }
+        .modal-content { transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .modal-overlay.active .modal-content { transform: translateY(0); }
+        
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+        .calendar-day { aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 50%; cursor: pointer; }
+        
+        .leaflet-container { z-index: 10 !important; font-family: 'Inter', sans-serif; }
+        .leaflet-control-attribution { display: none; }
+
+        /* Chart.js wrapper fix */
+        #habit-chart-wrapper { position: relative; width: 100%; height: 200px; }
+        #habit-chart { display: block; }
+
+        /* Animated pulse for preview state */
+        @keyframes pulseGlow {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(184, 243, 107, 0.5); }
+            50% { box-shadow: 0 0 0 8px rgba(184, 243, 107, 0); }
+        }
+        .pulse-glow { animation: pulseGlow 2s infinite; }
+    </style>
+</head>
+<body class="bg-lightBg dark:bg-darkBg text-lightText dark:text-darkText smooth-transition">
+
+    <div id="app-container" class="bg-lightBg dark:bg-darkBg relative">
+        
+        <header class="sticky top-0 z-40 px-6 py-4 glass-panel bg-lightBg/80 dark:bg-darkBg/80 flex justify-between items-center border-b border-lightSurface2 dark:border-darkSurface2">
+            <div class="flex items-center gap-2">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="text-lightAccent dark:text-darkAccent">
+                    <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <h1 class="text-xl font-bold tracking-tight">Dayflow</h1>
+            </div>
+            <button id="theme-toggle" class="p-2 rounded-full bg-lightSurface dark:bg-darkSurface shadow-sm hover:scale-105 active:scale-95 smooth-transition">
+                <i class="ph ph-moon text-xl dark:hidden text-lightText"></i>
+                <i class="ph ph-sun text-xl hidden dark:block text-darkAccent"></i>
+            </button>
+        </header>
+
+        <main class="flex-1 overflow-y-auto pb-24 px-6 pt-4 space-y-6">
+            
+            <!-- VIEW: TODAY -->
+            <div id="view-today" class="view-section space-y-6">
+                <div class="space-y-1">
+                    <h2 id="greeting-text" class="text-2xl font-semibold">Good Morning!</h2>
+                    <p id="current-date-text" class="text-sm text-lightText2 dark:text-darkText2">Jumat, 31 Oktober 2026</p>
+                </div>
+
+                <div class="bg-lightSurface dark:bg-darkSurface rounded-3xl p-6 shadow-sm border border-lightSurface2 dark:border-darkSurface2 flex items-center justify-between smooth-transition">
+                    <div class="space-y-2 flex-1">
+                        <h3 class="font-medium text-lightText2 dark:text-darkText2">Daily Progress</h3>
+                        <p class="text-2xl font-bold"><span id="completed-count">0</span><span class="text-sm font-normal text-lightText2 dark:text-darkText2"> / <span id="total-count">0</span> done</span></p>
+                        <p id="tasks-remaining" class="text-sm text-lightAccent dark:text-darkAccent font-medium">0 aktivitas tersisa</p>
+                    </div>
+                    <div class="relative w-24 h-24 flex-shrink-0">
+                        <svg class="w-full h-full" viewBox="0 0 100 100">
+                            <circle cx="50" cy="50" r="40" fill="none" class="stroke-lightSurface2 dark:stroke-darkSurface2" stroke-width="8"></circle>
+                            <circle id="progress-circle" cx="50" cy="50" r="40" fill="none" class="stroke-lightAccent dark:stroke-darkAccent progress-ring__circle" stroke-width="8" stroke-linecap="round" stroke-dasharray="251.2" stroke-dashoffset="251.2"></circle>
+                        </svg>
+                        <div class="absolute inset-0 flex items-center justify-center">
+                            <span id="progress-percentage" class="text-lg font-bold">0%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="space-y-4">
+                    <div class="flex justify-between items-center">
+                        <h3 class="font-semibold text-lg">Agenda Hari Ini</h3>
+                        <span class="text-xs px-2 py-1 rounded-full bg-lightSurface2 dark:bg-darkSurface2 text-lightText2 dark:text-darkText2" id="current-time">00:00</span>
+                    </div>
+                    <div id="timeline-container" class="space-y-0 mt-2"></div>
+                </div>
+            </div>
+
+            <!-- VIEW: CALENDAR -->
+            <div id="view-calendar" class="view-section hide space-y-6">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-2xl font-semibold">Kalender</h2>
+                    <div class="flex gap-2">
+                        <button id="cal-prev" class="p-2 rounded-full bg-lightSurface dark:bg-darkSurface shadow-sm"><i class="ph ph-caret-left"></i></button>
+                        <button id="cal-next" class="p-2 rounded-full bg-lightSurface dark:bg-darkSurface shadow-sm"><i class="ph ph-caret-right"></i></button>
+                    </div>
+                </div>
+                <div class="bg-lightSurface dark:bg-darkSurface rounded-3xl p-6 shadow-sm border border-lightSurface2 dark:border-darkSurface2">
+                    <h3 id="cal-month-year" class="text-center font-bold text-lg mb-4 text-lightAccent dark:text-darkAccent">Bulan Tahun</h3>
+                    <div class="calendar-grid text-center text-sm font-medium text-lightText2 dark:text-darkText2 mb-2">
+                        <div>Min</div><div>Sen</div><div>Sel</div><div>Rab</div><div>Kam</div><div>Jum</div><div>Sab</div>
+                    </div>
+                    <div id="cal-days-grid" class="calendar-grid text-sm font-semibold"></div>
+                </div>
+                <div class="space-y-4 mt-6">
+                    <h3 class="font-semibold text-lg" id="selected-date-title">Aktivitas Terpilih</h3>
+                    <div id="cal-day-details" class="space-y-3">
+                        <p class="text-sm text-lightText2 dark:text-darkText2">Pilih tanggal untuk melihat jadwal.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: HABITS -->
+            <div id="view-habits" class="view-section hide space-y-6">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-2xl font-semibold">Kebiasaan</h2>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-lightSurface dark:bg-darkSurface rounded-2xl p-4 shadow-sm border border-lightSurface2 dark:border-darkSurface2 text-center">
+                        <i class="ph ph-fire text-2xl text-[#F5A623] mb-1"></i>
+                        <h4 class="text-xs text-lightText2 dark:text-darkText2 uppercase tracking-wide">Total Habits</h4>
+                        <p id="habit-total-stat" class="text-xl font-bold mt-1">0</p>
+                    </div>
+                    <div class="bg-lightSurface dark:bg-darkSurface rounded-2xl p-4 shadow-sm border border-lightSurface2 dark:border-darkSurface2 text-center">
+                        <i class="ph ph-check-circle text-2xl text-lightAccent dark:text-darkAccent mb-1"></i>
+                        <h4 class="text-xs text-lightText2 dark:text-darkText2 uppercase tracking-wide">Done Today</h4>
+                        <p id="habit-done-stat" class="text-xl font-bold mt-1">0</p>
+                    </div>
+                </div>
+                
+                <div id="habit-list-container" class="space-y-3"></div>
+                
+                <!-- Habit Chart (Improved) -->
+                <div class="bg-lightSurface dark:bg-darkSurface rounded-3xl p-6 shadow-sm border border-lightSurface2 dark:border-darkSurface2 mt-4">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-semibold text-sm">Progres Kebiasaan</h3>
+                        <div class="flex gap-1 p-1 bg-lightSurface2 dark:bg-darkSurface2 rounded-full">
+                            <button data-range="7" class="chart-range-btn active px-3 py-1 rounded-full text-[11px] font-semibold bg-lightAccent dark:bg-darkAccent text-darkBg smooth-transition">7 Hari</button>
+                            <button data-range="30" class="chart-range-btn px-3 py-1 rounded-full text-[11px] font-semibold text-lightText2 dark:text-darkText2 smooth-transition">30 Hari</button>
+                        </div>
+                    </div>
+                    <div id="habit-chart-wrapper">
+                        <canvas id="habit-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: HEALTH -->
+            <div id="view-health" class="view-section hide space-y-6">
+                <h2 class="text-2xl font-semibold">Kesehatan</h2>
+                <div class="grid grid-cols-3 gap-3">
+                    <button onclick="openHealthModal('run')" class="bg-lightSurface dark:bg-darkSurface rounded-2xl p-4 flex flex-col items-center justify-center gap-2 shadow-sm border border-lightSurface2 dark:border-darkSurface2 hover:border-lightAccent dark:hover:border-darkAccent smooth-transition">
+                        <i class="ph ph-person-simple-run text-2xl text-lightAccent dark:text-darkAccent"></i>
+                        <span class="text-xs font-medium">Lari</span>
+                    </button>
+                    <button onclick="openHealthModal('workout')" class="bg-lightSurface dark:bg-darkSurface rounded-2xl p-4 flex flex-col items-center justify-center gap-2 shadow-sm border border-lightSurface2 dark:border-darkSurface2 hover:border-lightAccent dark:hover:border-darkAccent smooth-transition">
+                        <i class="ph ph-barbell text-2xl text-[#4A90E2]"></i>
+                        <span class="text-xs font-medium">Workout</span>
+                    </button>
+                    <button onclick="openHealthModal('calories')" class="bg-lightSurface dark:bg-darkSurface rounded-2xl p-4 flex flex-col items-center justify-center gap-2 shadow-sm border border-lightSurface2 dark:border-darkSurface2 hover:border-lightAccent dark:hover:border-darkAccent smooth-transition">
+                        <i class="ph ph-hamburger text-2xl text-[#F5A623]"></i>
+                        <span class="text-xs font-medium">Kalori</span>
+                    </button>
+                </div>
+                
+                <!-- Live Running Tracker -->
+                <div class="bg-lightSurface dark:bg-darkSurface rounded-3xl p-6 shadow-sm border border-lightSurface2 dark:border-darkSurface2">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="font-semibold text-lg">Live Running Tracker</h3>
+                        <span id="run-status-badge" class="text-xs font-medium px-2 py-1 rounded-md bg-lightSurface2 dark:bg-darkSurface2 text-lightText2 dark:text-darkText2">Siap</span>
+                    </div>
+                    <div id="run-map" class="w-full h-48 bg-lightSurface2 dark:bg-darkSurface2 rounded-xl mb-4 relative z-0"></div>
+                    <div class="grid grid-cols-4 gap-2 text-center mb-6">
+                        <div>
+                            <p class="text-[10px] text-lightText2 dark:text-darkText2 uppercase tracking-wide">Waktu</p>
+                            <p id="run-time" class="font-bold text-lg mt-1">00:00</p>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-lightText2 dark:text-darkText2 uppercase tracking-wide">Jarak</p>
+                            <p id="run-dist" class="font-bold text-lg mt-1">0.00 <span class="text-xs font-normal">km</span></p>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-lightText2 dark:text-darkText2 uppercase tracking-wide">Pace</p>
+                            <p id="run-pace" class="font-bold text-lg mt-1">-- <span class="text-xs font-normal">/km</span></p>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-lightText2 dark:text-darkText2 uppercase tracking-wide">Kalori</p>
+                            <p id="run-cal" class="font-bold text-lg mt-1">0 <span class="text-xs font-normal">kcal</span></p>
+                        </div>
+                    </div>
+                    
+                    <!-- Action buttons -->
+                    <div class="flex gap-3">
+                        <button id="btn-start-run" class="flex-1 py-3 px-4 bg-lightAccent dark:bg-darkAccent text-darkBg font-semibold rounded-xl hover:opacity-90 transition-opacity">Mulai Lari</button>
+                        <button id="btn-stop-run" class="hide flex-1 py-3 px-4 bg-[#D0021B] text-white font-semibold rounded-xl hover:opacity-90 transition-opacity">Berhenti</button>
+                    </div>
+                    
+                    <!-- Preview actions (muncul setelah berhenti) -->
+                    <div id="run-preview-actions" class="hide flex gap-3">
+                        <button id="btn-discard-run" class="flex-1 py-3 px-4 bg-lightSurface2 dark:bg-darkSurface2 text-lightText dark:text-darkText font-semibold rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2">
+                            <i class="ph ph-trash text-lg"></i> Buang
+                        </button>
+                        <button id="btn-save-run" class="flex-[2] py-3 px-4 bg-lightAccent dark:bg-darkAccent text-darkBg font-semibold rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2">
+                            <i class="ph ph-check text-lg"></i> Simpan
+                        </button>
+                    </div>
+                </div>
+
+                <h3 class="font-semibold text-lg mt-6">Riwayat Terbaru</h3>
+                <div id="health-list-container" class="space-y-3"></div>
+            </div>
+
+            <!-- VIEW: PROFILE -->
+            <div id="view-profile" class="view-section hide space-y-6">
+                <h2 class="text-2xl font-semibold">Profil & Pengaturan</h2>
+                <div class="bg-lightSurface dark:bg-darkSurface rounded-3xl p-6 shadow-sm border border-lightSurface2 dark:border-darkSurface2 space-y-4">
+                    <div class="flex items-center gap-4">
+                        <div class="w-16 h-16 rounded-full bg-lightSurface2 dark:bg-darkSurface2 flex items-center justify-center text-2xl font-bold text-lightAccent dark:text-darkAccent">DF</div>
+                        <div>
+                            <h3 class="font-semibold text-lg">My Profile</h3>
+                            <p class="text-sm text-lightText2 dark:text-darkText2">Keep pushing forward.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-lightSurface dark:bg-darkSurface rounded-3xl p-6 shadow-sm border border-lightSurface2 dark:border-darkSurface2 space-y-2">
+                    <h4 class="text-sm font-semibold text-lightText2 dark:text-darkText2 uppercase tracking-wide mb-4">Manajemen Data Lokal</h4>
+                    <button onclick="exportData()" class="w-full text-left py-3 px-4 rounded-xl bg-lightSurface2/50 dark:bg-darkSurface2/50 flex justify-between items-center hover:bg-lightSurface2 dark:hover:bg-darkSurface2 smooth-transition">
+                        <span class="flex items-center gap-2"><i class="ph ph-export text-lightAccent dark:text-darkAccent"></i> Export Data (JSON)</span>
+                        <i class="ph ph-caret-right text-lightText2 dark:text-darkText2"></i>
+                    </button>
+                    <button onclick="document.getElementById('import-file').click()" class="w-full text-left py-3 px-4 rounded-xl bg-lightSurface2/50 dark:bg-darkSurface2/50 flex justify-between items-center hover:bg-lightSurface2 dark:hover:bg-darkSurface2 smooth-transition">
+                        <span class="flex items-center gap-2"><i class="ph ph-import text-[#F5A623]"></i> Import Data (JSON)</span>
+                        <i class="ph ph-caret-right text-lightText2 dark:text-darkText2"></i>
+                    </button>
+                    <input type="file" id="import-file" class="hidden" accept=".json" onchange="importData(event)">
+                </div>
+            </div>
+
+        </main>
+
+        <button id="fab-add" class="absolute bottom-24 right-6 w-14 h-14 bg-lightAccent dark:bg-darkAccent text-darkBg rounded-2xl shadow-lg flex items-center justify-center hover:scale-105 active:scale-95 smooth-transition z-30">
+            <i class="ph ph-plus text-2xl font-bold"></i>
+        </button>
+
+        <nav class="absolute bottom-0 w-full glass-panel bg-lightSurface/90 dark:bg-darkSurface/90 border-t border-lightSurface2 dark:border-darkSurface2 pb-safe z-40">
+            <div class="flex justify-around items-center px-2 h-16">
+                <button class="nav-btn active flex flex-col items-center gap-1 w-16 text-lightAccent dark:text-darkAccent" data-target="view-today">
+                    <i class="ph-fill ph-house text-2xl"></i>
+                    <span class="text-[10px] font-medium">Hari Ini</span>
+                </button>
+                <button class="nav-btn flex flex-col items-center gap-1 w-16 text-lightText2 dark:text-darkText2 hover:text-lightText dark:hover:text-darkText smooth-transition" data-target="view-calendar">
+                    <i class="ph ph-calendar-blank text-2xl"></i>
+                    <span class="text-[10px] font-medium">Kalender</span>
+                </button>
+                <button class="nav-btn flex flex-col items-center gap-1 w-16 text-lightText2 dark:text-darkText2 hover:text-lightText dark:hover:text-darkText smooth-transition" data-target="view-habits">
+                    <i class="ph ph-check-square-offset text-2xl"></i>
+                    <span class="text-[10px] font-medium">Kebiasaan</span>
+                </button>
+                <button class="nav-btn flex flex-col items-center gap-1 w-16 text-lightText2 dark:text-darkText2 hover:text-lightText dark:hover:text-darkText smooth-transition" data-target="view-health">
+                    <i class="ph ph-heartbeat text-2xl"></i>
+                    <span class="text-[10px] font-medium">Kesehatan</span>
+                </button>
+                <button class="nav-btn flex flex-col items-center gap-1 w-16 text-lightText2 dark:text-darkText2 hover:text-lightText dark:hover:text-darkText smooth-transition" data-target="view-profile">
+                    <i class="ph ph-user text-2xl"></i>
+                    <span class="text-[10px] font-medium">Profil</span>
+                </button>
+            </div>
+        </nav>
+
+        <!-- MODALS -->
+        <div id="modal-container-activity" class="modal-overlay fixed inset-0 z-50 bg-black/60 flex items-end justify-center sm:items-center">
+            <div class="modal-content bg-lightBg dark:bg-darkSurface w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl border border-lightSurface2 dark:border-darkSurface2 max-h-[90vh] overflow-y-auto">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 id="modal-title" class="text-xl font-semibold">Tambah Aktivitas</h3>
+                    <button class="modal-close p-2 rounded-full bg-lightSurface2 dark:bg-darkSurface2 hover:bg-lightText2/20 dark:hover:bg-darkText2/20 smooth-transition"><i class="ph ph-x text-lg"></i></button>
+                </div>
+                <form id="activity-form" class="space-y-4">
+                    <input type="hidden" id="act-id">
+                    <div>
+                        <label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Nama Aktivitas</label>
+                        <input type="text" id="act-title" required placeholder="Cth: Lari Pagi" class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3 focus:outline-none focus:border-lightAccent dark:focus:border-darkAccent transition-colors">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Waktu Mulai</label>
+                            <input type="time" id="act-time" required class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3 focus:outline-none focus:border-lightAccent dark:focus:border-darkAccent transition-colors">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Status</label>
+                            <select id="act-status" class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3 focus:outline-none focus:border-lightAccent dark:focus:border-darkAccent transition-colors appearance-none">
+                                <option value="Planned">Planned</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Completed">Completed</option>
+                                <option value="Postponed">Postponed</option>
+                                <option value="Skipped">Skipped</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Kategori</label>
+                        <div class="flex flex-wrap gap-2 mt-2" id="category-chips"></div>
+                        <input type="hidden" id="act-category" required>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Catatan</label>
+                        <textarea id="act-notes" rows="2" placeholder="Detail..." class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3 focus:outline-none focus:border-lightAccent dark:focus:border-darkAccent transition-colors"></textarea>
+                    </div>
+                    <div class="pt-4 flex gap-3">
+                        <button type="button" id="btn-act-delete" class="hide flex-1 py-3 px-4 bg-status-skipped/10 text-status-skipped font-semibold rounded-xl hover:bg-status-skipped/20 transition-colors">Hapus</button>
+                        <button type="submit" class="flex-[2] py-3 px-4 bg-lightAccent dark:bg-darkAccent text-darkBg font-semibold rounded-xl hover:opacity-90 transition-opacity">Simpan</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="modal-container-habit" class="modal-overlay fixed inset-0 z-50 bg-black/60 flex items-end justify-center sm:items-center">
+            <div class="modal-content bg-lightBg dark:bg-darkSurface w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl border border-lightSurface2 dark:border-darkSurface2 max-h-[90vh] overflow-y-auto">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-xl font-semibold">Tambah Kebiasaan</h3>
+                    <button class="modal-close p-2 rounded-full bg-lightSurface2 dark:bg-darkSurface2 hover:bg-lightText2/20 dark:hover:bg-darkText2/20 smooth-transition"><i class="ph ph-x text-lg"></i></button>
+                </div>
+                <form id="habit-form" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Nama Kebiasaan</label>
+                        <input type="text" id="habit-title" required placeholder="Cth: Minum 2L Air" class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3 focus:outline-none focus:border-lightAccent dark:focus:border-darkAccent transition-colors">
+                    </div>
+                    <div class="pt-4 flex gap-3">
+                        <button type="submit" class="w-full py-3 px-4 bg-lightAccent dark:bg-darkAccent text-darkBg font-semibold rounded-xl hover:opacity-90 transition-opacity">Simpan Kebiasaan</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div id="modal-container-health" class="modal-overlay fixed inset-0 z-50 bg-black/60 flex items-end justify-center sm:items-center">
+            <div class="modal-content bg-lightBg dark:bg-darkSurface w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl border border-lightSurface2 dark:border-darkSurface2 max-h-[90vh] overflow-y-auto">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 id="health-modal-title" class="text-xl font-semibold">Catat Kesehatan</h3>
+                    <button class="modal-close p-2 rounded-full bg-lightSurface2 dark:bg-darkSurface2 hover:bg-lightText2/20 dark:hover:bg-darkText2/20 smooth-transition"><i class="ph ph-x text-lg"></i></button>
+                </div>
+                <form id="health-form" class="space-y-4">
+                    <input type="hidden" id="health-type">
+                    <div id="health-inputs-run" class="hide space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div><label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Jarak (KM)</label><input type="number" step="0.01" id="h-distance" class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3"></div>
+                            <div><label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Durasi (Menit)</label><input type="number" id="h-duration" class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3"></div>
+                        </div>
+                    </div>
+                    <div id="health-inputs-workout" class="hide space-y-4">
+                        <div><label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Jenis Latihan</label><input type="text" id="h-workout-type" placeholder="Cth: Push up, Squat" class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3"></div>
+                        <div><label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Durasi (Menit)</label><input type="number" id="h-workout-duration" class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3"></div>
+                    </div>
+                    <div id="health-inputs-calories" class="hide space-y-4">
+                        <div><label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Nama Makanan</label><input type="text" id="h-food" placeholder="Cth: Nasi Goreng" class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3"></div>
+                        <div><label class="block text-sm font-medium text-lightText2 dark:text-darkText2 mb-1">Kalori (Kcal)</label><input type="number" id="h-calories" class="w-full bg-lightSurface dark:bg-darkBg border border-lightSurface2 dark:border-darkSurface2 rounded-xl px-4 py-3"></div>
+                    </div>
+                    <div class="pt-4 flex gap-3">
+                        <button type="submit" class="w-full py-3 px-4 bg-lightAccent dark:bg-darkAccent text-darkBg font-semibold rounded-xl hover:opacity-90 transition-opacity">Simpan Catatan</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        /* --- STATE & CONFIG --- */
+        const categories = [
+            { id: 'Spiritual', icon: 'ph-moon-stars' },
+            { id: 'Productivity', icon: 'ph-rocket-launch' },
+            { id: 'Work', icon: 'ph-briefcase' },
+            { id: 'Learning', icon: 'ph-book-open' },
+            { id: 'Exercise', icon: 'ph-person-simple-run' },
+            { id: 'Health', icon: 'ph-heartbeat' },
+            { id: 'Personal', icon: 'ph-user' },
+            { id: 'Rest', icon: 'ph-bed' },
+            { id: 'Other', icon: 'ph-dots-three-circle' }
+        ];
+
+        let currentDate = new Date();
+        let calCurrentMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+        let currentView = 'view-today';
+        let db;
+        
+        let habitChartInstance = null;
+        let habitChartRange = 7;
+        let runMap = null;
+        let runPolyline = null;
+        let runWatchId = null;
+        let runTimerInterval = null;
+        let runSeconds = 0;
+        let runCoordinates = [];
+        let runTotalDistance = 0;
+        let runPreviewMode = false;
+
+        /* --- THEME --- */
+        const htmlEl = document.documentElement;
+        document.getElementById('theme-toggle').addEventListener('click', () => {
+            htmlEl.classList.toggle('dark');
+            localStorage.setItem('dayflow_theme', htmlEl.classList.contains('dark') ? 'dark' : 'light');
+            if (currentView === 'view-habits') loadHabits();
+        });
+        if (localStorage.getItem('dayflow_theme') === 'light') htmlEl.classList.remove('dark');
+
+        /* --- INDEXED DB --- */
+        const DB_NAME = 'DayflowDB';
+        const DB_VERSION = 2;
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onerror = (e) => reject(e.target.error);
+                request.onsuccess = (e) => { db = e.target.result; resolve(); };
+                request.onupgradeneeded = (e) => {
+                    const upgradeDb = e.target.result;
+                    if (!upgradeDb.objectStoreNames.contains('activities')) 
+                        upgradeDb.createObjectStore('activities', { keyPath: 'id', autoIncrement: true }).createIndex('date', 'date', { unique: false });
+                    if (!upgradeDb.objectStoreNames.contains('habits')) 
+                        upgradeDb.createObjectStore('habits', { keyPath: 'id', autoIncrement: true });
+                    if (!upgradeDb.objectStoreNames.contains('habit_logs')) 
+                        upgradeDb.createObjectStore('habit_logs', { keyPath: 'id', autoIncrement: true }).createIndex('habit_date', ['habitId', 'date'], { unique: true });
+                    if (!upgradeDb.objectStoreNames.contains('health_logs')) 
+                        upgradeDb.createObjectStore('health_logs', { keyPath: 'id', autoIncrement: true }).createIndex('date', 'date', { unique: false });
+                };
+            });
+        }
+
+        const dbOps = {
+            getAll: (s) => new Promise((res, rej) => {
+                const req = db.transaction([s], 'readonly').objectStore(s).getAll();
+                req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+            }),
+            add: (s, d) => new Promise((res, rej) => {
+                const req = db.transaction([s], 'readwrite').objectStore(s).add(d);
+                req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+            }),
+            put: (s, d) => new Promise((res, rej) => {
+                const req = db.transaction([s], 'readwrite').objectStore(s).put(d);
+                req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+            }),
+            delete: (s, id) => new Promise((res, rej) => {
+                const req = db.transaction([s], 'readwrite').objectStore(s).delete(Number(id));
+                req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+            }),
+            getByIndex: (s, i, v) => new Promise((res, rej) => {
+                const req = db.transaction([s], 'readonly').objectStore(s).index(i).getAll(v);
+                req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+            }),
+            clear: (s) => new Promise((res, rej) => {
+                const req = db.transaction([s], 'readwrite').objectStore(s).clear();
+                req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+            })
+        };
+
+        /* --- UTILS --- */
+        const fmtDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        const fmtRead = (d) => ['Min','Sen','Sel','Rab','Kam','Jum','Sab'][d.getDay()] + `, ${d.getDate()} ` + ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][d.getMonth()] + ` ${d.getFullYear()}`;
+
+        /* --- RENDER TODAY --- */
+        async function loadToday() {
+            document.getElementById('current-date-text').textContent = fmtRead(currentDate);
+            const dateStr = fmtDate(currentDate);
+            const acts = await dbOps.getByIndex('activities', 'date', dateStr);
+            acts.sort((a, b) => a.time.localeCompare(b.time));
+            
+            const total = acts.length;
+            const completed = acts.filter(a => a.status === 'Completed').length;
+            document.getElementById('total-count').textContent = total;
+            document.getElementById('completed-count').textContent = completed;
+            document.getElementById('tasks-remaining').textContent = `${total - completed} aktivitas tersisa`;
+            const pct = total ? Math.round((completed/total)*100) : 0;
+            document.getElementById('progress-percentage').textContent = `${pct}%`;
+            const circle = document.getElementById('progress-circle');
+            const circ = circle.r.baseVal.value * 2 * Math.PI;
+            circle.style.strokeDasharray = `${circ} ${circ}`;
+            circle.style.strokeDashoffset = circ - (pct/100)*circ;
+
+            const container = document.getElementById('timeline-container');
+            if (!acts.length) {
+                container.innerHTML = `<div class="text-center py-10 text-lightText2 text-sm italic">Belum ada aktivitas hari ini.</div>`;
+                return;
+            }
+            container.innerHTML = acts.map(act => {
+                const catObj = categories.find(c => c.id === act.category) || categories[categories.length-1];
+                let colorCls = 'text-lightText2', dotCls = 'bg-lightText2 dark:bg-darkText2', cardOpa = 'opacity-100';
+                if(act.status==='Completed') { colorCls='text-lightAccent dark:text-darkAccent'; dotCls='bg-lightAccent dark:bg-darkAccent shadow-[0_0_10px_rgba(184,243,107,0.5)]'; }
+                else if(act.status==='In Progress') { colorCls='text-[#F5A623]'; dotCls='bg-[#F5A623] animate-pulse'; }
+                else if(act.status==='Skipped') { colorCls='text-[#D0021B]'; dotCls='bg-[#D0021B]'; cardOpa='opacity-50 line-through'; }
+                else if(act.status==='Postponed') { colorCls='text-[#9013FE]'; dotCls='bg-[#9013FE]'; cardOpa='opacity-70'; }
+                
+                const isCompleted = act.status === 'Completed';
+                const checkIcon = isCompleted ? 'ph-check-circle text-lightAccent dark:text-darkAccent' : 'ph-circle text-lightText2 dark:text-darkText2';
+
+                return `
+                <div class="timeline-item relative flex gap-4 w-full cursor-pointer group" onclick="openActModal(${act.id})">
+                    <div class="timeline-line relative flex flex-col items-center pt-2">
+                        <div class="w-10 h-10 rounded-full flex items-center justify-center ${dotCls} text-white z-10">
+                            <i class="ph ${catObj.icon} text-lg"></i>
+                        </div>
+                    </div>
+                    <div class="flex-1 pb-6 pt-1">
+                        <div class="bg-lightSurface dark:bg-darkSurface rounded-2xl p-4 shadow-sm border border-lightSurface2 dark:border-darkSurface2 ${cardOpa} flex items-center gap-3">
+                            <button onclick="toggleActStatus(event, ${act.id})" class="flex-shrink-0 hover:scale-110 active:scale-90 smooth-transition">
+                                <i class="ph ${checkIcon} text-3xl"></i>
+                            </button>
+                            <div class="flex-1">
+                                <div class="flex justify-between items-start mb-1">
+                                    <h4 class="font-semibold text-[15px]">${act.title}</h4>
+                                    <span class="text-xs font-medium px-2 py-0.5 rounded-md border border-lightSurface2 dark:border-darkSurface2 ${colorCls}">${act.status}</span>
+                                </div>
+                                <div class="flex items-center gap-3 text-xs text-lightText2 dark:text-darkText2">
+                                    <span><i class="ph ph-clock"></i> ${act.time}</span>
+                                    <span><i class="ph ph-tag"></i> ${act.category}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+        
+        async function toggleActStatus(event, id) {
+            event.stopPropagation();
+            const acts = await dbOps.getAll('activities');
+            const act = acts.find(a => a.id === id);
+            if(act) {
+                act.status = act.status === 'Completed' ? 'Planned' : 'Completed';
+                await dbOps.put('activities', act);
+                loadToday();
+            }
+        }
+
+        /* --- RENDER CALENDAR --- */
+        async function loadCalendar() {
+            const y = calCurrentMonth.getFullYear(), m = calCurrentMonth.getMonth();
+            document.getElementById('cal-month-year').textContent = new Date(y, m).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+            
+            const firstDay = new Date(y, m, 1).getDay();
+            const daysInMonth = new Date(y, m + 1, 0).getDate();
+            
+            const acts = await dbOps.getAll('activities');
+            const actsMap = {};
+            acts.forEach(a => {
+                if(a.date.startsWith(`${y}-${String(m+1).padStart(2,'0')}`)) {
+                    actsMap[a.date] = (actsMap[a.date] || 0) + 1;
+                }
+            });
+
+            const grid = document.getElementById('cal-days-grid');
+            grid.innerHTML = '';
+            for(let i = 0; i < firstDay; i++) grid.innerHTML += `<div></div>`;
+            for(let d = 1; d <= daysInMonth; d++) {
+                const dateStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                const hasActs = actsMap[dateStr] ? `<div class="w-1.5 h-1.5 rounded-full bg-lightAccent dark:bg-darkAccent mt-1"></div>` : '';
+                const isToday = dateStr === fmtDate(new Date()) ? 'bg-lightSurface2 dark:bg-darkSurface2' : '';
+                grid.innerHTML += `
+                    <div class="calendar-day ${isToday} hover:bg-lightSurface2/50 dark:hover:bg-darkSurface2/50 smooth-transition" onclick="showCalDayDetails('${dateStr}')">
+                        <span>${d}</span>${hasActs}
+                    </div>`;
+            }
+        }
+
+        async function showCalDayDetails(dateStr) {
+            document.getElementById('selected-date-title').textContent = `Jadwal: ${dateStr}`;
+            const acts = await dbOps.getByIndex('activities', 'date', dateStr);
+            const container = document.getElementById('cal-day-details');
+            if(!acts.length) { container.innerHTML = `<p class="text-sm text-lightText2">Tidak ada aktivitas.</p>`; return; }
+            container.innerHTML = acts.map(a => `
+                <div class="p-3 bg-lightSurface dark:bg-darkSurface rounded-xl border border-lightSurface2 dark:border-darkSurface2 text-sm flex justify-between">
+                    <span class="font-medium">${a.title}</span><span class="text-lightText2">${a.time}</span>
+                </div>
+            `).join('');
+        }
+
+        document.getElementById('cal-prev').onclick = () => { calCurrentMonth.setMonth(calCurrentMonth.getMonth()-1); loadCalendar(); };
+        document.getElementById('cal-next').onclick = () => { calCurrentMonth.setMonth(calCurrentMonth.getMonth()+1); loadCalendar(); };
+
+        /* --- RENDER HABITS --- */
+        async function loadHabits() {
+            const habits = await dbOps.getAll('habits');
+            const logs = await dbOps.getAll('habit_logs');
+            const todayStr = fmtDate(currentDate);
+            
+            let doneTodayCount = 0;
+            const container = document.getElementById('habit-list-container');
+            
+            if(!habits.length) {
+                container.innerHTML = `<div class="text-center py-10 text-lightText2 text-sm italic">Belum ada kebiasaan. Tambahkan sekarang.</div>`;
+            } else {
+                container.innerHTML = habits.map(h => {
+                    const hLogs = logs.filter(l => l.habitId === h.id);
+                    const doneToday = hLogs.some(l => l.date === todayStr);
+                    if(doneToday) doneTodayCount++;
+                    
+                    let streak = 0;
+                    let checkDate = new Date(currentDate);
+                    while(true) {
+                        const dStr = fmtDate(checkDate);
+                        if(hLogs.some(l => l.date === dStr)) streak++;
+                        else if(dStr !== todayStr) break;
+                        checkDate.setDate(checkDate.getDate()-1);
+                    }
+
+                    const btnCls = doneToday ? 'bg-lightAccent dark:bg-darkAccent text-darkBg' : 'bg-lightSurface2 dark:bg-darkSurface2 text-lightText2 dark:text-darkText2';
+                    const iconCls = doneToday ? 'ph-check-circle' : 'ph-circle';
+
+                    return `
+                    <div class="bg-lightSurface dark:bg-darkSurface rounded-2xl p-4 shadow-sm border border-lightSurface2 dark:border-darkSurface2 flex justify-between items-center">
+                        <div>
+                            <h4 class="font-semibold">${h.title}</h4>
+                            <p class="text-xs text-lightText2 mt-1"><i class="ph ph-fire text-[#F5A623]"></i> ${streak} day streak</p>
+                        </div>
+                        <button onclick="toggleHabit(${h.id}, ${doneToday})" class="w-10 h-10 rounded-full flex items-center justify-center ${btnCls} smooth-transition hover:scale-105">
+                            <i class="ph ${iconCls} text-2xl"></i>
+                        </button>
+                    </div>`;
+                }).join('');
+            }
+            document.getElementById('habit-total-stat').textContent = habits.length;
+            document.getElementById('habit-done-stat').textContent = doneTodayCount;
+            
+            renderHabitChart(habits, logs);
+        }
+
+        /* --- IMPROVED HABIT CHART --- */
+        function renderHabitChart(habits, logs) {
+            const canvas = document.getElementById('habit-chart');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const range = habitChartRange;
+            
+            const labels = [];
+            const dataPts = [];
+            for(let i=range-1; i>=0; i--) {
+                const d = new Date(currentDate);
+                d.setDate(d.getDate() - i);
+                let label = '';
+                if (range <= 7) {
+                    label = d.toLocaleDateString('id-ID', { weekday: 'short' });
+                } else {
+                    if (i === range-1 || i === 0 || i % 5 === 0) {
+                        label = d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+                    }
+                }
+                labels.push(label);
+                const dStr = fmtDate(d);
+                let doneCount = 0;
+                habits.forEach(h => {
+                    if(logs.some(l => l.habitId === h.id && l.date === dStr)) doneCount++;
+                });
+                const pct = habits.length ? Math.round((doneCount / habits.length) * 100) : 0;
+                dataPts.push(pct);
+            }
+
+            const isDark = document.documentElement.classList.contains('dark');
+            const colorAccent = isDark ? '#B8F36B' : '#78B83D';
+            const colorGrid = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+            const colorText = isDark ? '#929B91' : '#6E786D';
+            const pointBorder = isDark ? '#191D1A' : '#FFFFFF';
+
+            // Gradient fill
+            const wrapper = document.getElementById('habit-chart-wrapper');
+            const height = wrapper ? wrapper.clientHeight : 200;
+            const gradient = ctx.createLinearGradient(0, 0, 0, height);
+            gradient.addColorStop(0, colorAccent + '99');
+            gradient.addColorStop(0.6, colorAccent + '33');
+            gradient.addColorStop(1, colorAccent + '00');
+
+            // Destroy existing chart to apply new range smoothly
+            if (habitChartInstance) {
+                habitChartInstance.destroy();
+                habitChartInstance = null;
+            }
+
+            habitChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Progres',
+                        data: dataPts,
+                        borderColor: colorAccent,
+                        backgroundColor: gradient,
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: colorAccent,
+                        pointBorderColor: pointBorder,
+                        pointBorderWidth: 2,
+                        pointRadius: range <= 7 ? 5 : 3,
+                        pointHoverRadius: 8,
+                        pointHoverBackgroundColor: colorAccent,
+                        pointHoverBorderColor: pointBorder,
+                        pointHoverBorderWidth: 3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: {
+                        duration: 1200,
+                        easing: 'easeOutQuart'
+                    },
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: isDark ? '#191D1A' : '#FFFFFF',
+                            titleColor: isDark ? '#F5F7F2' : '#182018',
+                            bodyColor: isDark ? '#929B91' : '#6E786D',
+                            borderColor: colorAccent,
+                            borderWidth: 1,
+                            padding: 12,
+                            cornerRadius: 10,
+                            displayColors: false,
+                            titleFont: { size: 12, weight: '600' },
+                            bodyFont: { size: 13, weight: '500' },
+                            callbacks: {
+                                title: (items) => items[0].label,
+                                label: (ctx) => `✓ ${ctx.parsed.y}% selesai`
+                            }
+                        }
+                    },
+                    scales: {
+                        y: { 
+                            beginAtZero: true, 
+                            max: 100, 
+                            grid: { color: colorGrid, drawBorder: false }, 
+                            ticks: { 
+                                color: colorText, 
+                                stepSize: 25,
+                                callback: v => v + '%',
+                                font: { size: 10 }
+                            } 
+                        },
+                        x: { 
+                            grid: { display: false }, 
+                            ticks: { 
+                                color: colorText, 
+                                maxRotation: 0, 
+                                autoSkip: false,
+                                font: { size: 10 }
+                            } 
+                        }
+                    }
+                }
+            });
+        }
+
+        async function toggleHabit(habitId, isDone) {
+            const todayStr = fmtDate(currentDate);
+            if(isDone) {
+                const logs = await dbOps.getAll('habit_logs');
+                const log = logs.find(l => l.habitId === habitId && l.date === todayStr);
+                if(log) await dbOps.delete('habit_logs', log.id);
+            } else {
+                await dbOps.add('habit_logs', { habitId, date: todayStr });
+            }
+            loadHabits();
+        }
+
+        /* Filter buttons untuk chart */
+        document.querySelectorAll('.chart-range-btn').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('.chart-range-btn').forEach(b => {
+                    b.classList.remove('active', 'bg-lightAccent', 'dark:bg-darkAccent', 'text-darkBg');
+                    b.classList.add('text-lightText2', 'dark:text-darkText2');
+                });
+                btn.classList.add('active', 'bg-lightAccent', 'dark:bg-darkAccent', 'text-darkBg');
+                btn.classList.remove('text-lightText2', 'dark:text-darkText2');
+                habitChartRange = parseInt(btn.dataset.range);
+                loadHabits();
+            };
+        });
+
+        /* --- RENDER HEALTH --- */
+        async function loadHealth() {
+            const logs = await dbOps.getAll('health_logs');
+            logs.sort((a,b) => b.id - a.id);
+            const container = document.getElementById('health-list-container');
+            if(!logs.length) {
+                container.innerHTML = `<div class="text-center py-10 text-lightText2 text-sm italic">Belum ada catatan kesehatan.</div>`;
+                return;
+            }
+            container.innerHTML = logs.slice(0, 10).map(l => {
+                let icon = 'ph-heartbeat', color = 'text-lightText2', title = 'Log', detail = '';
+                if(l.type === 'run') { icon='ph-person-simple-run'; color='text-lightAccent dark:text-darkAccent'; title='Lari'; detail=`${l.distance} KM • ${l.duration} mnt • ${l.calories||0} kcal`; }
+                if(l.type === 'workout') { icon='ph-barbell'; color='text-[#4A90E2]'; title=`Workout: ${l.workoutType}`; detail=`${l.duration} mnt`; }
+                if(l.type === 'calories') { icon='ph-hamburger'; color='text-[#F5A623]'; title=l.food; detail=`${l.calories} Kcal`; }
+                
+                return `
+                <div class="bg-lightSurface dark:bg-darkSurface rounded-2xl p-4 shadow-sm border border-lightSurface2 dark:border-darkSurface2 flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-lightSurface2 dark:bg-darkSurface2 flex items-center justify-center ${color} flex-shrink-0">
+                        <i class="ph ${icon} text-xl"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <h4 class="font-semibold text-sm truncate">${title}</h4>
+                        <p class="text-xs text-lightText2 truncate">${detail} • ${l.date}</p>
+                    </div>
+                    <button onclick="deleteHealthLog(${l.id})" class="w-9 h-9 rounded-full flex items-center justify-center bg-[#D0021B]/10 text-[#D0021B] hover:bg-[#D0021B]/20 smooth-transition flex-shrink-0" title="Hapus">
+                        <i class="ph ph-trash text-lg"></i>
+                    </button>
+                </div>`;
+            }).join('');
+        }
+
+        async function deleteHealthLog(id) {
+            if (!confirm('Hapus catatan kesehatan ini?')) return;
+            try {
+                await dbOps.delete('health_logs', id);
+                loadHealth();
+            } catch(e) { console.warn('Delete failed:', e); }
+        }
+
+        /* --- RUNNING TRACKER LOGIC --- */
+        const deg2rad = (deg) => deg * (Math.PI / 180);
+
+        function calcDistanceKM(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = deg2rad(lat2 - lat1);
+            const dLon = deg2rad(lon2 - lon1);
+            const a = Math.sin(dLat/2)**2 +
+                      Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+                      Math.sin(dLon/2)**2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        function fmtTime(sec) {
+            const m = Math.floor(sec / 60);
+            const s = sec % 60;
+            return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+
+        function initRunMap() {
+            if (runMap) return;
+            if (typeof L === 'undefined') { console.warn('Leaflet not loaded'); return; }
+            try {
+                runMap = L.map('run-map', { zoomControl: false }).setView([-6.200000, 106.816666], 15);
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(runMap);
+            } catch (e) { console.warn('Map init failed:', e); }
+        }
+
+        function setRunBadge(text, mode) {
+            const badge = document.getElementById('run-status-badge');
+            badge.textContent = text;
+            badge.classList.remove('text-lightText2', 'dark:text-darkText2', 'text-lightAccent', 'dark:text-darkAccent', 'text-[#F5A623]', 'text-[#D0021B]', 'pulse-glow');
+            if (mode === 'running') { badge.classList.add('text-lightAccent', 'dark:text-darkAccent', 'pulse-glow'); }
+            else if (mode === 'warning') badge.classList.add('text-[#F5A623]');
+            else if (mode === 'error') badge.classList.add('text-[#D0021B]');
+            else badge.classList.add('text-lightText2', 'dark:text-darkText2');
+        }
+
+        function updateRunDisplays() {
+            document.getElementById('run-time').textContent = fmtTime(runSeconds);
+
+            let pace = '--';
+            if (runTotalDistance > 0) {
+                const paceVal = (runSeconds / 60) / runTotalDistance;
+                const paceM = Math.floor(paceVal);
+                const paceS = Math.floor((paceVal - paceM) * 60);
+                pace = `${paceM}:${String(paceS).padStart(2, '0')}`;
+            }
+            document.getElementById('run-pace').innerHTML = `${pace} <span class="text-xs font-normal">/km</span>`;
+            const calories = Math.round(runTotalDistance * 70 * 1.036);
+            document.getElementById('run-cal').innerHTML = `${calories} <span class="text-xs font-normal">kcal</span>`;
+            document.getElementById('run-dist').innerHTML = `${runTotalDistance.toFixed(2)} <span class="text-xs font-normal">km</span>`;
+        }
+
+        function resetRunUI() {
+            runSeconds = 0;
+            runTotalDistance = 0;
+            runCoordinates = [];
+            runPreviewMode = false;
+            document.getElementById('run-time').textContent = '00:00';
+            document.getElementById('run-dist').innerHTML = `0.00 <span class="text-xs font-normal">km</span>`;
+            document.getElementById('run-pace').innerHTML = `-- <span class="text-xs font-normal">/km</span>`;
+            document.getElementById('run-cal').innerHTML = `0 <span class="text-xs font-normal">kcal</span>`;
+            if (runPolyline && runMap) {
+                try { runMap.removeLayer(runPolyline); } catch (e) {}
+            }
+            runPolyline = null;
+            document.getElementById('run-preview-actions').classList.add('hide');
+            document.getElementById('btn-stop-run').classList.add('hide');
+            document.getElementById('btn-start-run').classList.remove('hide');
+            setRunBadge('Siap', 'idle');
+        }
+
+        /* START */
+        document.getElementById('btn-start-run').onclick = () => {
+            initRunMap();
+
+            document.getElementById('btn-start-run').classList.add('hide');
+            document.getElementById('btn-stop-run').classList.remove('hide');
+            document.getElementById('run-preview-actions').classList.add('hide');
+            setRunBadge('Berjalan', 'running');
+
+            runSeconds = 0;
+            runTotalDistance = 0;
+            runCoordinates = [];
+            runPreviewMode = false;
+            updateRunDisplays();
+
+            if (runPolyline && runMap) {
+                try { runMap.removeLayer(runPolyline); } catch (e) {}
+            }
+            runPolyline = null;
+            if (runMap && typeof L !== 'undefined') {
+                try {
+                    runPolyline = L.polyline([], { color: '#B8F36B', weight: 5 }).addTo(runMap);
+                } catch (e) {}
+            }
+
+            if (runTimerInterval) clearInterval(runTimerInterval);
+            runTimerInterval = setInterval(() => {
+                runSeconds++;
+                updateRunDisplays();
+            }, 1000);
+
+            if (navigator.geolocation) {
+                try {
+                    runWatchId = navigator.geolocation.watchPosition(
+                        (pos) => {
+                            const newPoint = [pos.coords.latitude, pos.coords.longitude];
+                            if (runCoordinates.length === 0 && runMap) {
+                                try { runMap.setView(newPoint, 17); } catch (e) {}
+                            } else if (runCoordinates.length > 0) {
+                                const last = runCoordinates[runCoordinates.length - 1];
+                                const dist = calcDistanceKM(last[0], last[1], newPoint[0], newPoint[1]);
+                                if (dist > 0.002) {
+                                    runTotalDistance += dist;
+                                    updateRunDisplays();
+                                }
+                            }
+                            runCoordinates.push(newPoint);
+                            if (runPolyline) { try { runPolyline.addLatLng(newPoint); } catch (e) {} }
+                            if (runMap) { try { runMap.panTo(newPoint); } catch (e) {} }
+                        },
+                        (err) => {
+                            console.warn('GPS error:', err.code, err.message);
+                            if (err.code === 1)      setRunBadge('GPS Ditolak', 'error');
+                            else if (err.code === 2) setRunBadge('GPS N/A', 'warning');
+                            else                     setRunBadge('GPS Timeout', 'warning');
+                        },
+                        { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+                    );
+                } catch (e) {
+                    setRunBadge('Tanpa GPS', 'warning');
+                }
+            } else {
+                setRunBadge('Tanpa GPS', 'warning');
+            }
+        };
+
+        /* STOP → masuk preview mode (BELUM simpan) */
+        document.getElementById('btn-stop-run').onclick = () => {
+            if (runWatchId !== null && navigator.geolocation) {
+                try { navigator.geolocation.clearWatch(runWatchId); } catch (e) {}
+                runWatchId = null;
+            }
+            if (runTimerInterval) {
+                clearInterval(runTimerInterval);
+                runTimerInterval = null;
+            }
+            
+            // Freeze metrik — JANGAN reset
+            runPreviewMode = true;
+            document.getElementById('btn-stop-run').classList.add('hide');
+            document.getElementById('run-preview-actions').classList.remove('hide');
+            setRunBadge('Selesai', 'warning');
+        };
+
+        /* SIMPAN */
+        document.getElementById('btn-save-run').onclick = async () => {
+            if (runTotalDistance > 0 || runSeconds > 1) {
+                try {
+                    await dbOps.add('health_logs', {
+                        type: 'run',
+                        date: fmtDate(currentDate),
+                        distance: runTotalDistance.toFixed(2),
+                        duration: Math.ceil(runSeconds / 60),
+                        calories: Math.round(runTotalDistance * 70 * 1.036),
+                        timestamp: new Date().toISOString()
+                    });
+                    loadHealth();
+                } catch (e) { console.warn('Save run failed:', e); }
+            }
+            resetRunUI();
+        };
+
+        /* BUANG */
+        document.getElementById('btn-discard-run').onclick = () => {
+            if (!confirm('Buang hasil lari ini? Data tidak akan disimpan.')) return;
+            resetRunUI();
+        };
+
+        /* --- MODALS & FORMS --- */
+        function closeAllModals() { document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active')); }
+        document.querySelectorAll('.modal-close').forEach(btn => btn.onclick = closeAllModals);
+        document.querySelectorAll('.modal-overlay').forEach(ov => { ov.onclick = (e) => { if(e.target===ov) closeAllModals(); }});
+
+        document.getElementById('fab-add').onclick = () => {
+            if(currentView === 'view-today') openActModal();
+            else if(currentView === 'view-habits') { document.getElementById('habit-form').reset(); document.getElementById('modal-container-habit').classList.add('active'); }
+            else if(currentView === 'view-health') openHealthModal('run');
+        };
+
+        async function openActModal(id = null) {
+            const chips = document.getElementById('category-chips');
+            chips.innerHTML = categories.map(c => `<button type="button" data-val="${c.id}" class="cat-chip px-3 py-1 text-xs font-medium border border-lightSurface2 dark:border-darkSurface2 rounded-full">${c.id}</button>`).join('');
+            document.querySelectorAll('.cat-chip').forEach(b => b.onclick = (e) => {
+                document.querySelectorAll('.cat-chip').forEach(x => x.classList.remove('border-lightAccent','text-lightAccent'));
+                e.target.classList.add('border-lightAccent','text-lightAccent');
+                document.getElementById('act-category').value = e.target.dataset.val;
+            });
+
+            if(id) {
+                const acts = await dbOps.getAll('activities');
+                const act = acts.find(a => a.id === id);
+                document.getElementById('modal-title').textContent = "Edit Aktivitas";
+                document.getElementById('btn-act-delete').classList.remove('hide');
+                document.getElementById('act-id').value = act.id;
+                document.getElementById('act-title').value = act.title;
+                document.getElementById('act-time').value = act.time;
+                document.getElementById('act-status').value = act.status;
+                document.getElementById('act-notes').value = act.notes || '';
+                document.querySelector(`.cat-chip[data-val="${act.category}"]`)?.click();
+            } else {
+                document.getElementById('activity-form').reset();
+                document.getElementById('modal-title').textContent = "Tambah Aktivitas";
+                document.getElementById('btn-act-delete').classList.add('hide');
+                const d = new Date(); d.setMinutes(Math.ceil(d.getMinutes()/5)*5);
+                document.getElementById('act-time').value = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                document.querySelector('.cat-chip').click();
+            }
+            document.getElementById('modal-container-activity').classList.add('active');
+        }
+
+        document.getElementById('activity-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const data = {
+                title: document.getElementById('act-title').value,
+                time: document.getElementById('act-time').value,
+                status: document.getElementById('act-status').value,
+                category: document.getElementById('act-category').value,
+                notes: document.getElementById('act-notes').value,
+                date: fmtDate(currentDate)
+            };
+            const id = document.getElementById('act-id').value;
+            if(id) { data.id = Number(id); await dbOps.put('activities', data); }
+            else await dbOps.add('activities', data);
+            closeAllModals(); loadToday();
+        };
+
+        document.getElementById('btn-act-delete').onclick = async () => {
+            const id = document.getElementById('act-id').value;
+            if(id) { await dbOps.delete('activities', id); closeAllModals(); loadToday(); }
+        };
+
+        document.getElementById('habit-form').onsubmit = async (e) => {
+            e.preventDefault();
+            await dbOps.add('habits', { title: document.getElementById('habit-title').value });
+            closeAllModals(); loadHabits();
+        };
+
+        function openHealthModal(type) {
+            document.getElementById('health-form').reset();
+            document.getElementById('health-type').value = type;
+            ['run','workout','calories'].forEach(t => document.getElementById(`health-inputs-${t}`).classList.add('hide'));
+            document.getElementById(`health-inputs-${type}`).classList.remove('hide');
+            const titles = { run: 'Catat Lari', workout: 'Catat Workout', calories: 'Catat Kalori' };
+            document.getElementById('health-modal-title').textContent = titles[type];
+            document.getElementById('modal-container-health').classList.add('active');
+        }
+
+        document.getElementById('health-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const type = document.getElementById('health-type').value;
+            const data = { type, date: fmtDate(currentDate) };
+            if(type === 'run') { data.distance = document.getElementById('h-distance').value; data.duration = document.getElementById('h-duration').value; }
+            if(type === 'workout') { data.workoutType = document.getElementById('h-workout-type').value; data.duration = document.getElementById('h-workout-duration').value; }
+            if(type === 'calories') { data.food = document.getElementById('h-food').value; data.calories = document.getElementById('h-calories').value; }
+            await dbOps.add('health_logs', data);
+            closeAllModals(); loadHealth();
+        };
+
+        /* --- IMPORT & EXPORT --- */
+        async function exportData() {
+            try {
+                const data = {
+                    activities: await dbOps.getAll('activities'),
+                    habits: await dbOps.getAll('habits'),
+                    habit_logs: await dbOps.getAll('habit_logs'),
+                    health_logs: await dbOps.getAll('health_logs'),
+                    exportDate: new Date().toISOString()
+                };
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = `Dayflow_Backup_${fmtDate(new Date())}.json`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            } catch(e) { console.error("Export failed", e); }
+        }
+
+        async function importData(e) {
+            const file = e.target.files[0];
+            if(!file) return;
+            const reader = new FileReader();
+            reader.onload = async (ev) => {
+                try {
+                    const data = JSON.parse(ev.target.result);
+                    if(data.activities && data.habits) {
+                        await dbOps.clear('activities'); await dbOps.clear('habits'); await dbOps.clear('habit_logs'); await dbOps.clear('health_logs');
+                        for(let a of data.activities) await dbOps.add('activities', a);
+                        for(let h of data.habits) await dbOps.add('habits', h);
+                        if(data.habit_logs) for(let hl of data.habit_logs) await dbOps.add('habit_logs', hl);
+                        if(data.health_logs) for(let hl of data.health_logs) await dbOps.add('health_logs', hl);
+                        document.querySelector('.nav-btn[data-target="view-today"]').click();
+                    }
+                } catch(err) { console.error("Import failed", err); }
+            };
+            reader.readAsText(file);
+        }
+
+        /* --- NAVIGATION --- */
+        document.querySelectorAll('.nav-btn').forEach(btn => {
+            btn.onclick = () => {
+                const target = btn.dataset.target;
+                currentView = target;
+                
+                document.querySelectorAll('.nav-btn').forEach(b => {
+                    b.classList.remove('text-lightAccent', 'dark:text-darkAccent', 'active');
+                    b.classList.add('text-lightText2', 'dark:text-darkText2');
+                    b.querySelector('i').classList.replace('ph-fill', 'ph');
+                });
+                btn.classList.add('text-lightAccent', 'dark:text-darkAccent', 'active');
+                btn.classList.remove('text-lightText2', 'dark:text-darkText2');
+                btn.querySelector('i').classList.replace('ph', 'ph-fill');
+
+                document.querySelectorAll('.view-section').forEach(v => v.classList.add('hide'));
+                document.getElementById(target).classList.remove('hide');
+
+                if(target === 'view-today') loadToday();
+                if(target === 'view-calendar') loadCalendar();
+                if(target === 'view-habits') loadHabits();
+                if(target === 'view-health') {
+                    loadHealth();
+                    initRunMap();
+                    setTimeout(() => { if (runMap) { try { runMap.invalidateSize(); } catch (e) {} } }, 300);
+                }
+
+                const fab = document.getElementById('fab-add');
+                if(['view-profile', 'view-calendar'].includes(target)) fab.classList.add('hide');
+                else fab.classList.remove('hide');
+            };
+        });
+
+        /* --- INIT --- */
+        window.addEventListener('DOMContentLoaded', async () => {
+            setInterval(() => {
+                const now = new Date();
+                document.getElementById('current-time').textContent = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+            }, 1000);
+            
+            try {
+                await initDB();
+                await loadToday();
+            } catch (err) { console.error("Initialization Failed:", err); }
+        });
+    </script>
+</body>
+</html>
